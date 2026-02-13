@@ -1,5 +1,6 @@
 import * as Comlink from "comlink";
 import {
+  SQLite3Error,
   type ExecBaseOptions,
   type ExecReturnResultRowsOptions,
   type ExecRowModeArrayOptions,
@@ -207,6 +208,14 @@ const sharedInterface = {
       },
   ): Promise<SqlValue[][]> {
     return await withLeader(async (remote) => await remote.dbExec(opts));
+  },
+
+  async dbRead(name: string, opts: any): Promise<SqlValue[][]> {
+    return await withLeader(async (remote) => await remote.dbRead(name, opts));
+  },
+
+  async dbWrite(name: string, opts: any): Promise<SqlValue[][]> {
+    return await withLeader(async (remote) => await remote.dbWrite(name, opts));
   },
 };
 

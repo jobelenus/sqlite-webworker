@@ -179,11 +179,12 @@ export const initializeSQLite = async (dbName: string) => {
 
 const locks: Record<string, ReadWriteLock> = {};
 // eslint-disable-next-line @typescript-eslint/no-explicit-any
-export const dbRead = async (db: Database, name: string, opts: any) => {
+export const dbRead = async (name: string, opts: any) => {
   const lock = locks[name];
   if (!lock) throw new Error("DB Lock not acquired");
+  if (!sqlite) throw new Error(DB_NOT_INIT_ERR);
   return await lock.readLock(() => {
-    return db.exec(opts);
+    return sqlite.exec(opts);
   });
 };
 // eslint-disable-next-line @typescript-eslint/no-explicit-any
