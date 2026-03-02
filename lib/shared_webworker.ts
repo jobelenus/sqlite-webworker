@@ -1,18 +1,13 @@
 import * as Comlink from "comlink";
 import {
-  SQLite3Error,
   type ExecBaseOptions,
   type ExecReturnResultRowsOptions,
   type ExecRowModeArrayOptions,
   type FlexibleString,
   type SqlValue,
 } from "@sqlite.org/sqlite-wasm";
-import {
-  DB_NOT_INIT_ERR,
-  SHARED_BROADCAST_CHANNEL_NAME,
-  type BroadcastMessage,
-  type WorkerInterface,
-} from "./webworker";
+import { type BroadcastMessage, type WorkerInterface } from "./webworker";
+import { DB_NOT_INIT_ERR, SHARED_BROADCAST_CHANNEL_NAME } from "./consts";
 
 // Wait 5 seconds after we no longer have any remotes before terminating ourselves
 const SHUTDOWN_DELAY_MS = 5000;
@@ -219,4 +214,4 @@ const sharedInterface = {
   },
 };
 
-export const SharedInterface = typeof sharedInterface;
+export type SharedInterface = typeof sharedInterface;

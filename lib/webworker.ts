@@ -8,12 +8,12 @@ import sqlite3InitModule, {
   type Sqlite3Static,
   type SqlValue,
 } from "@sqlite.org/sqlite-wasm";
-
-export const SHARED_BROADCAST_CHANNEL_NAME = "SHAREDWORKER_BROADCAST";
-export const FORCE_LEADER_ELECTION = "FORCE_LEADER_ELECTION";
-export const DB_NOT_INIT_ERR = "DB_NOT_INIT";
-export const WORKER_LOCK_KEY = "WORKER_LOCK";
-export const NOROW = Symbol("NOROW");
+import {
+  DB_NOT_INIT_ERR,
+  FORCE_LEADER_ELECTION,
+  NOROW,
+  WORKER_LOCK_KEY,
+} from "./consts";
 
 let abortController: AbortController | undefined;
 
@@ -182,17 +182,18 @@ const locks: Record<string, ReadWriteLock> = {};
 export const dbRead = async (name: string, opts: any) => {
   const lock = locks[name];
   if (!lock) throw new Error("DB Lock not acquired");
-  if (!sqlite) throw new Error(DB_NOT_INIT_ERR);
   return await lock.readLock(() => {
+    if (!sqlite) throw new Error(DB_NOT_INIT_ERR);
     return sqlite.exec(opts);
   });
 };
 // eslint-disable-next-line @typescript-eslint/no-explicit-any
-export const dbWrite = async (db: Database, name: string, opts: any) => {
+export const dbWrite = async (name: string, opts: any) => {
   const lock = locks[name];
   if (!lock) throw new Error("DB Lock not acquired");
   return await lock.writeLock(() => {
-    return db.exec(opts);
+    if (!sqlite) throw new Error(DB_NOT_INIT_ERR);
+    return sqlite.exec(opts);
   });
 };
 
@@ -222,15 +223,25 @@ export const dbExec = (
 export type BroadcastMessage = Record<string, any>;
 
 let hasTheLock = false;
+let workerId: string | undefined = undefined;
 const workerInterface = {
   dbExec,
   createLock,
   dbRead,
   dbWrite,
+  async getWorkerId(): Promise<string | undefined> {
+    return workerId;
+  },
   async hasDbLock(): Promise<boolean> {
     return hasTheLock;
   },
-  async initialize(dbName: string, gotLockPort: MessagePort, _userPk: string) {
+  async initialize(
+    dbName: string,
+    gotLockPort: MessagePort,
+    _userPk: string,
+    _workerId: string,
+  ) {
+    workerId = _workerId;
     debug("waiting for lock in webworker");
     if (abortController) {
       abortController.abort();
