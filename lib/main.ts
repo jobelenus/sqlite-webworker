@@ -11,29 +11,25 @@ import {
 const ulid = monotonicFactory(() => Math.random());
 export const workerId = ulid();
 
-// Shared workers are unique per *name*, not per code URL.
-const spawnSharedWorker = (url: string, name: string) =>
-  new SharedWorker(new URL(url, import.meta.url), {
+// Shared workers are unique per *name*, not per code URL. The name is suffixed
+// with the library version so a new build elects a fresh shared worker and tabs
+// migrate to it (see the boot broadcast handler below). The script URL is a
+// literal `new URL(..., import.meta.url)` so the bundler emits the worker as a
+// separate asset.
+const spawnSharedWorker = (name: string) =>
+  new SharedWorker(new URL("./shared_webworker.ts", import.meta.url), {
     type: "module",
     name,
   });
 
-const __SHARED_WEB_WORKER_URL__ = import.meta.env.SHARED_WEB_WORKER_URL;
-const __SHARED_WORKER_HASH__ = import.meta.env.SHARED_WORKER_HASH;
-const __WEB_WORKER_URL__ = import.meta.env.WEB_WORKER_URL;
-const __WEB_WORKER_HASH__ = import.meta.env.WEB_WORKER_HASH;
-
-let sharedWebWorkerName = `multiplexer-${__SHARED_WORKER_HASH__}`;
-let sharedWorker = spawnSharedWorker(
-  __SHARED_WEB_WORKER_URL__,
-  sharedWebWorkerName,
-);
+let sharedWebWorkerName = `multiplexer-${__LIB_VERSION__}`;
+let sharedWorker = spawnSharedWorker(sharedWebWorkerName);
 let db: Comlink.Remote<SharedInterface> = Comlink.wrap(sharedWorker.port);
 let lockAcquired = false;
 
-const tabWorker = new Worker(new URL(__WEB_WORKER_URL__, import.meta.url), {
+const tabWorker = new Worker(new URL("./webworker.ts", import.meta.url), {
   type: "module",
-  name: `db-${__WEB_WORKER_HASH__}`,
+  name: `db-${__LIB_VERSION__}`,
 });
 const tabDb: Comlink.Remote<WorkerInterface> = Comlink.wrap(tabWorker);
 
@@ -51,7 +47,7 @@ onSharedWorkerBootBroadcastChannel.onmessage = async (msg) => {
 
     // eslint-disable-next-line no-console
     db.unregisterRemote(workerId);
-    sharedWorker = spawnSharedWorker(__WEB_WORKER_URL__, name);
+    sharedWorker = spawnSharedWorker(name);
     sharedWebWorkerName = name;
     db = Comlink.wrap(sharedWorker.port);
     db.registerRemote(workerId, Comlink.proxy(tabDb));
@@ -154,4 +150,29 @@ lockAcquiredBroadcastChannel.onmessage = (message) => {
   if (lockTabId !== workerId) {
     lockAcquired = true;
   }
+};
+
+// Run SQL against the database. Routed to whichever tab currently holds the DB
+// leader lock. Pass `rowMode`/`returnValue` to get result rows back (e.g.
+// `{ sql, rowMode: "array", returnValue: "resultRows" }`); omit them for writes.
+type DbExecOptions = Parameters<SharedInterface["dbExec"]>[0];
+export const dbExec = (
+  opts: Omit<DbExecOptions, "rowMode" | "returnValue"> &
+    Partial<Pick<DbExecOptions, "rowMode" | "returnValue">>,
+) => db.dbExec(opts as DbExecOptions);
+
+// Ask the leader worker to push `message` to every tab on this origin. Pair with
+// `subscribe` in each tab's main thread to react. The leader worker performs the
+// post, so all main threads receive it (including the tab that called this).
+export const notifyTabs = (channelName: string, message: unknown) =>
+  db.notifyTabs(channelName, message);
+
+// Listen for messages pushed via `notifyTabs`. Returns an unsubscribe function.
+export const subscribe = <T = unknown>(
+  channelName: string,
+  callback: (message: T) => void,
+): (() => void) => {
+  const channel = new BroadcastChannel(channelName);
+  channel.onmessage = (event: MessageEvent) => callback(event.data as T);
+  return () => channel.close();
 };

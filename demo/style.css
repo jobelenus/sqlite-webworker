@@ -1,0 +1,71 @@
+:root {
+  font-family: system-ui, Avenir, Helvetica, Arial, sans-serif;
+  line-height: 1.5;
+  color-scheme: light dark;
+}
+
+body {
+  margin: 0;
+  padding: 2rem;
+}
+
+#app {
+  max-width: 40rem;
+  margin: 0 auto;
+}
+
+h1 {
+  font-size: 1.6rem;
+}
+
+p {
+  opacity: 0.8;
+}
+
+form {
+  display: flex;
+  gap: 0.5rem;
+  margin: 1.5rem 0;
+}
+
+input {
+  flex: 1;
+  padding: 0.5rem 0.75rem;
+  font-size: 1rem;
+  border: 1px solid currentColor;
+  border-radius: 6px;
+  background: transparent;
+  color: inherit;
+}
+
+button {
+  padding: 0.5rem 1rem;
+  font-size: 1rem;
+  border-radius: 6px;
+  border: 1px solid transparent;
+  background: #646cff;
+  color: white;
+  cursor: pointer;
+}
+
+button:hover {
+  background: #535bf2;
+}
+
+table {
+  width: 100%;
+  border-collapse: collapse;
+}
+
+th,
+td {
+  text-align: left;
+  padding: 0.5rem 0.75rem;
+  border-bottom: 1px solid rgba(128, 128, 128, 0.3);
+}
+
+th:last-child,
+td:last-child {
+  text-align: right;
+  font-variant-numeric: tabular-nums;
+}

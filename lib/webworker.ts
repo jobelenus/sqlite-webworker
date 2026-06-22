@@ -1,5 +1,5 @@
 import sqlite3InitModule, {
-  Database,
+  type Database,
   type ExecBaseOptions,
   type ExecReturnResultRowsOptions,
   type ExecRowModeArrayOptions,
@@ -271,6 +271,14 @@ const workerInterface = {
     );
   },
   async receiveBroadcast(_message: BroadcastMessage) {},
+  // Push a message to every tab on this origin. Runs in the leader worker, so
+  // the post originates from the worker and is received by all main threads
+  // (including the tab that triggered it).
+  async notifyTabs(channelName: string, message: unknown) {
+    const channel = new BroadcastChannel(channelName);
+    channel.postMessage(message);
+    channel.close();
+  },
 } as const;
 
 export type WorkerInterface = typeof workerInterface;

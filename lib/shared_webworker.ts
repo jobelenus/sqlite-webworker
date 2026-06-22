@@ -212,6 +212,10 @@ const sharedInterface = {
   async dbWrite(name: string, opts: any): Promise<SqlValue[][]> {
     return await withLeader(async (remote) => await remote.dbWrite(name, opts));
   },
+
+  async notifyTabs(channelName: string, message: unknown): Promise<void> {
+    await withLeader(async (remote) => remote.notifyTabs(channelName, message));
+  },
 };
 
 export type SharedInterface = typeof sharedInterface;
