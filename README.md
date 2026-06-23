@@ -21,32 +21,31 @@ dist/
   db-core.js                 # "/db-core":   raw sqlite + lock helpers
   *.d.ts                     # types for each entry
   assets/
-    webworker-*.js           # default per-tab DB worker  (self-contained)
-    shared_webworker-*.js    # cross-tab SharedWorker      (self-contained)
+    shared_webworker-*.js    # cross-tab SharedWorker multiplexer  (self-contained)
     sqlite3-*.js             # sqlite-wasm runtime
 ```
 
-`db-worker` / `db-core` are imported **into your own DB worker** (Option B in Usage) so your
-SQL runs in the worker. The `assets/` workers are the default ones used when you don't supply
-your own.
+You build your **own** DB worker (the thing that holds the SQLite connection) by importing
+`db-worker` / `db-core` — see Usage. The library ships only the cross-tab **multiplexer** as a
+standalone asset.
 
-The two worker files are **standalone assets**. They are not inlined into
-`sqlite-webworker.js`, because:
+The multiplexer is a **standalone asset**, not inlined into `sqlite-webworker.js`, because a
+`SharedWorker` is keyed by `(origin, name, script-URL)`. If it were inlined as a `blob:` URL,
+every tab would get a *different* URL and therefore its own worker — defeating the point of
+sharing one database across tabs. So it must be served at a known URL.
 
-- A `SharedWorker` is keyed by `(origin, name, script-URL)`. If it were inlined as a
-  `blob:` URL, every tab would get a *different* URL and therefore its own worker — which
-  defeats the whole point of sharing one database across tabs.
-- Shipping the workers as plain `.js` files means **you do not need a Vite (or any
-  worker-aware) bundler** to consume this library. The files just need to be served at a
-  known URL. See below.
-
-At runtime the entry loads the workers from an **origin-absolute** path:
+At runtime the entry loads it from an **origin-absolute** path (the reference is
+`@vite-ignore`d, so your bundler leaves it alone):
 
 ```js
 new SharedWorker(new URL("/assets/shared_webworker-<hash>.js", import.meta.url), ...)
 ```
 
-So the worker files must be reachable at `https://your-app/assets/...`.
+So the multiplexer asset must be reachable at `https://your-app/assets/...` (see Setup).
+
+> Note: you **do** need a worker-capable bundler (Vite, etc.) to build your own DB worker
+> (`new Worker(new URL("./your.worker.ts", import.meta.url), { type: "module" })`). The copy
+> step below is only about serving the library's prebuilt multiplexer + sqlite assets.
 
 ---
 
@@ -115,16 +114,30 @@ This copies the workers into `dist/assets/` on every build, so they are served a
 
 ## Usage
 
-There are two ways to use the library. Both boot a per-tab DB worker, join the `SharedWorker`
-multiplexer, and run leader election so exactly **one** tab owns the single OPFS connection;
-every call is routed to that leader.
+You always supply your **own** DB worker (built with `defineDbWorker`). The lib boots one per
+tab, joins the `SharedWorker` multiplexer, and runs leader election so exactly **one** tab owns
+the single OPFS connection; every call is routed to that leader. There are two ways to drive
+it.
 
-### Option A — generic: run SQL from the main thread
+### Option A — a minimal worker, run SQL from the main thread
+
+A one-line worker, then ad-hoc `dbExec` from the main thread:
 
 ```ts
+// db.worker.ts
+import { defineDbWorker } from "@your-scope/sqlite-webworker/db-worker";
+defineDbWorker();
+```
+
+```ts
+// main thread
 import { init, dbExec } from "@your-scope/sqlite-webworker";
 
-await init({ dbName: "my-database", userPk: userPrimaryKey });
+await init({
+  dbName: "my-database",
+  userPk: userPrimaryKey,
+  dbWorker: () => new Worker(new URL("./db.worker.ts", import.meta.url), { type: "module" }),
+});
 
 await dbExec({ sql: "CREATE TABLE IF NOT EXISTS todo (id INTEGER PRIMARY KEY, text TEXT)" });
 const rows = await dbExec({
@@ -134,10 +147,10 @@ const rows = await dbExec({
 });
 ```
 
-### Option B — own your SQL in a worker (no SQL on the main thread)
+### Option B — own your SQL in the worker (no SQL on the main thread)
 
-Build your **own** DB worker with `defineDbWorker`. Put `CREATE TABLE` in `setup` and your
-queries in `methods`; they execute in the elected leader worker, off the main thread.
+Put `CREATE TABLE` in `setup` and your queries in `methods`; they execute in the elected leader
+worker, off the main thread. The main thread gets a typed `api` and never sees SQL.
 
 ```ts
 // todos.worker.ts

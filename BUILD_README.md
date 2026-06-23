@@ -5,7 +5,8 @@ Steps to cut and publish a new version of `@your-scope/sqlite-webworker` to npm.
 ## How the build is wired (read once)
 
 - **`npm run build`** = `vite build && tsc -p tsconfig.build.json`
-  - `vite build` → library bundle + worker assets into `dist/` (see `vite.config.ts`).
+  - `vite build` → three entry bundles (`sqlite-webworker`, `db-worker`, `db-core`) + the
+    worker assets into `dist/` (see `vite.config.ts`).
   - `tsc -p tsconfig.build.json` → `.d.ts` type declarations into `dist/`.
 - **`prepublishOnly`** runs `npm run build` automatically on `npm publish`, so the
   published `dist/` is always freshly built — you cannot publish a stale build.
@@ -73,15 +74,24 @@ npm version major     # breaking change:0.0.1 -> 1.0.0
 npm publish --dry-run     # lists the exact files in the tarball
 ```
 
-Confirm the tarball contains:
+Confirm the tarball contains all three entry points, their declarations, and the worker
+assets:
 
 ```
-dist/sqlite-webworker.js
-dist/main.d.ts
-dist/assets/webworker-*.js
-dist/assets/shared_webworker-*.js
-dist/assets/sqlite3-*.js
+dist/sqlite-webworker.js          # "." entry (main-thread client)
+dist/db-worker.js                 # "/db-worker" entry (defineDbWorker + helpers)
+dist/db-core.js                   # "/db-core" entry (raw sqlite + lock helpers)
+dist/main.d.ts                    # types for "."
+dist/db-worker.d.ts               # types for "/db-worker"
+dist/db-core.d.ts                 # types for "/db-core"
+dist/chunks/*.js                  # shared internal chunks (e.g. consts)
+dist/assets/shared_webworker-*.js # cross-tab SharedWorker multiplexer
+dist/assets/sqlite3-*.js          # sqlite-wasm runtime
 ```
+
+The three entries map to the `exports` field in `package.json` — if you add or rename an
+entry in `vite.config.ts`, update both `exports` and this list. `db-worker`/`db-core` are
+what consumers import to build their own DB worker.
 
 (`npm pack` writes the tarball to disk if you want to unpack and look closer.)
 

@@ -28,15 +28,9 @@ let db: Comlink.Remote<SharedInterface> = Comlink.wrap(sharedWorker.port);
 let lockAcquired = false;
 
 // The dedicated DB worker (the thing that owns the OPFS connection when elected
-// leader). Constructed in `init` from the factory the consumer supplies, so
-// they can ship their own worker with app SQL methods. Defaults to the lib's
-// generic DB worker.
-const defaultDbWorker = () =>
-  new Worker(new URL("./webworker.ts", import.meta.url), {
-    type: "module",
-    name: `db-${__LIB_VERSION__}`,
-  });
-
+// leader). Constructed in `init` from the factory the consumer supplies. Build
+// it with `defineDbWorker` (the "@scope/sqlite-webworker/db-worker" export) so
+// your SQL runs in the worker.
 let tabWorker: Worker | undefined;
 let tabDb: Comlink.Remote<BaseWorkerInterface> | undefined;
 
@@ -102,10 +96,10 @@ export interface InitOptions {
   dbName: string;
   // Your app's user identifier.
   userPk: string;
-  // Factory for the dedicated DB worker. Supply one built with `defineDbWorker`
-  // to own your SQL inside the worker; omit to use the lib's generic worker and
-  // drive it with the exported `dbExec`.
-  dbWorker?: () => Worker;
+  // Factory for the dedicated DB worker, built with `defineDbWorker`. One is
+  // created per tab; the multiplexer elects a single leader that owns the OPFS
+  // connection.
+  dbWorker: () => Worker;
 }
 
 let ranInit = false;
@@ -113,7 +107,7 @@ export const init = async (opts: InitOptions): Promise<void> => {
   if (!ranInit) {
     ranInit = true;
 
-    tabWorker = (opts.dbWorker ?? defaultDbWorker)();
+    tabWorker = opts.dbWorker();
     tabDb = Comlink.wrap(tabWorker);
 
     const { port1, port2 } = new MessageChannel();
