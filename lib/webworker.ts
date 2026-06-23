@@ -130,9 +130,7 @@ const start = async (
 ) => {
   if ("opfs" in sqlite3) {
     if (!poolUtil) {
-      console.log("[worker] installOpfsSAHPoolVfs() start");
       poolUtil = await sqlite3.installOpfsSAHPoolVfs({});
-      console.log("[worker] installOpfsSAHPoolVfs() done");
     } else if (poolUtil.isPaused()) {
       await poolUtil.unpauseVfs();
     }
@@ -171,13 +169,9 @@ const start = async (
 
 export const initializeSQLite = async (dbName: string) => {
   try {
-    console.log("[worker] sqlite3InitModule() start");
     const sqlite3 = await sqlite3InitModule();
-    console.log("[worker] sqlite3InitModule() done, opfs in module:", "opfs" in sqlite3);
     await start(sqlite3, dbName);
-    console.log("[worker] start() done");
   } catch (err) {
-    console.error("[worker] Initialization error:", err);
     if (err instanceof Error) {
       error("Initialization error:", err.name, err.message);
     } else error("Initialization error:", err);
@@ -249,15 +243,6 @@ const workerInterface = {
     _workerId: string,
   ) {
     workerId = _workerId;
-    const lockState = await navigator.locks.query();
-    console.log(
-      "[worker] initialize() called. WORKER_LOCK_KEY:",
-      WORKER_LOCK_KEY,
-      "held:",
-      JSON.stringify(lockState.held),
-      "pending:",
-      JSON.stringify(lockState.pending),
-    );
     debug("waiting for lock in webworker");
     if (abortController) {
       abortController.abort();
@@ -268,11 +253,9 @@ const workerInterface = {
       WORKER_LOCK_KEY,
       { mode: "exclusive", signal: abortController.signal },
       async () => {
-        console.log("[worker] web lock granted, initializing sqlite");
         hasTheLock = true;
         await initializeSQLite(dbName);
 
-        console.log("[worker] got web lock, sqlite initialized, posting lock acquired");
         gotLockPort.postMessage("lock acquired");
         return new Promise((resolve) => {
           forceLeaderElectionBroadcastChannel.onmessage = () => {

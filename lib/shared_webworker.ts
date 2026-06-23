@@ -159,15 +159,11 @@ const sharedInterface = {
     }
   },
   async registerRemote(id: string, remote: Comlink.Remote<WorkerInterface>) {
-    console.log("[shared] registerRemote called", id);
     if (!remotes[id]) {
       debug("register remote in shared", id);
       remotes[id] = remote;
     }
-    console.log("[shared] registerRemote: calling remote.hasDbLock()", id);
-    const has = await remote.hasDbLock();
-    console.log("[shared] registerRemote: hasDbLock =", has, id);
-    if (has) {
+    if (await remote.hasDbLock()) {
       await this.setLeader(id);
     }
   },
@@ -181,7 +177,6 @@ const sharedInterface = {
   },
 
   async setLeader(remoteId: string) {
-    console.log("[shared] setLeader", remoteId);
     debug("setting remote in shared web worker to", remoteId);
 
     currentLeader = remotes[remoteId];
