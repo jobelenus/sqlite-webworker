@@ -206,6 +206,31 @@ await api.addTodo("buy milk");
 The two `/db-worker` and `/db-core` subpath exports exist so your bundler can build that worker.
 See `demo/counters.worker.ts` + `demo/counters.ts` for a complete working example.
 
+### Which one? (the serialization trade-off)
+
+Every call crosses thread boundaries by `postMessage`, and **each boundary is a structured
+clone** — a deep copy of the arguments in and the results out:
+
+```
+main thread → SharedWorker (multiplexer) → leader DB worker → SQLite
+```
+
+(a query from a *follower* tab is also forwarded through the leader's main thread, so up to
+three clones each way).
+
+- **Option A** ships every query's full payload across and the **entire result set** back,
+  cloned at each hop. Reading 100k rows to compute a sum on the main thread clones all 100k
+  rows just to discard them; large payloads also jank the main thread (cloning is synchronous
+  on the calling thread). N dependent queries = N round trips.
+- **Option B** runs the SQL **and any intermediate logic** in the worker, so only the method's
+  small inputs and the **final shaped output** cross threads. That 100k-row sum becomes
+  `SELECT sum(...)` returning one number — one tiny clone; a multi-query transaction becomes
+  one method call = one round trip. Intermediate result sets are never serialized.
+
+Use **A** for small payloads and occasional queries (the overhead is negligible). Prefer **B**
+for large result sets, chatty/multi-step operations, and hot paths — reduce and aggregate
+*before* the thread boundary.
+
 ## Requirements
 
 - A browser with `SharedWorker`, `Worker` (module workers), `BroadcastChannel`, `Web Locks`,
