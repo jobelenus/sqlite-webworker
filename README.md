@@ -51,38 +51,17 @@ So the multiplexer asset must be reachable at `https://your-app/assets/...` (see
 
 ## Setup
 
-### If you are NOT using a Vite bundler (the default path) — copy the assets
+This library requires a **worker-capable bundler** (Vite, or any bundler that supports
+`new Worker(new URL("./x.ts", import.meta.url), { type: "module" })`). You use it to build
+your own DB worker (see Usage).
 
-Your bundler will not know about the worker files (the references are intentionally opaque,
-so no bundler is required). Copy them into whatever directory your server serves at
-`/assets`:
+Separately, the library's prebuilt **multiplexer + sqlite assets** are referenced at an
+origin-absolute `/assets/...` path and are intentionally opaque to your bundler
+(`@vite-ignore`), so you must make sure they are served there. Two ways:
 
-```sh
-cp -R node_modules/@your-scope/sqlite-webworker/dist/assets ./public/assets
-```
+### Option 1 — let Vite copy them (recommended if you use Vite)
 
-Most setups serve a `public/` (or `static/`, `www/`, `dist/`) directory at the site root, so
-`public/assets/...` becomes `https://your-app/assets/...` — which is exactly where the
-library looks.
-
-Re-run this copy whenever you upgrade the package (the hashed filenames change between
-versions). A simple way is a `postinstall` script in your `package.json`:
-
-```json
-{
-  "scripts": {
-    "postinstall": "cp -R node_modules/@your-scope/sqlite-webworker/dist/assets ./public/assets"
-  }
-}
-```
-
-> The assets must end up at the `/assets/` path on the origin that loads them. If your app is
-> served from a sub-path or a CDN, place the files so that `/<your-base>/assets/...` resolves.
-
-### If you ARE using Vite — let Vite copy the assets for you
-
-You can skip the manual copy and let Vite move the worker assets into your build output using
-[`vite-plugin-static-copy`](https://github.com/sapphi-red/vite-plugin-static-copy):
+Use [`vite-plugin-static-copy`](https://github.com/sapphi-red/vite-plugin-static-copy):
 
 ```sh
 npm install -D vite-plugin-static-copy
@@ -107,8 +86,32 @@ export default defineConfig({
 });
 ```
 
-This copies the workers into `dist/assets/` on every build, so they are served at
-`/assets/...` with no manual step and no stale files after an upgrade.
+This copies the assets into your build output on every build, served at `/assets/...` with no
+manual step and no stale files after an upgrade.
+
+### Option 2 — copy them yourself
+
+Copy the assets into whatever directory your server serves at `/assets`:
+
+```sh
+cp -R node_modules/@your-scope/sqlite-webworker/dist/assets ./public/assets
+```
+
+Most setups serve a `public/` (or `static/`, `www/`, `dist/`) directory at the site root, so
+`public/assets/...` becomes `https://your-app/assets/...` — which is exactly where the library
+looks. Re-run this whenever you upgrade (hashed filenames change between versions); a
+`postinstall` script keeps it automatic:
+
+```json
+{
+  "scripts": {
+    "postinstall": "cp -R node_modules/@your-scope/sqlite-webworker/dist/assets ./public/assets"
+  }
+}
+```
+
+> The assets must end up at the `/assets/` path on the origin that loads them. If your app is
+> served from a sub-path or a CDN, place the files so that `/<your-base>/assets/...` resolves.
 
 ---
 
