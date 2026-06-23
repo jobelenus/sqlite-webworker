@@ -16,13 +16,19 @@ npm install @your-scope/sqlite-webworker
 
 ```
 dist/
-  sqlite-webworker.js        # the entry you import
-  main.d.ts                  # types
+  sqlite-webworker.js        # main entry  (".")
+  db-worker.js               # "/db-worker": defineDbWorker + helpers for your own DB worker
+  db-core.js                 # "/db-core":   raw sqlite + lock helpers
+  *.d.ts                     # types for each entry
   assets/
-    webworker-*.js           # per-tab DB worker      (self-contained)
-    shared_webworker-*.js    # cross-tab SharedWorker  (self-contained)
+    webworker-*.js           # default per-tab DB worker  (self-contained)
+    shared_webworker-*.js    # cross-tab SharedWorker      (self-contained)
     sqlite3-*.js             # sqlite-wasm runtime
 ```
+
+`db-worker` / `db-core` are imported **into your own DB worker** (Option B in Usage) so your
+SQL runs in the worker. The `assets/` workers are the default ones used when you don't supply
+your own.
 
 The two worker files are **standalone assets**. They are not inlined into
 `sqlite-webworker.js`, because:
@@ -109,19 +115,80 @@ This copies the workers into `dist/assets/` on every build, so they are served a
 
 ## Usage
 
-```ts
-import { init, workerId } from "@your-scope/sqlite-webworker";
+There are two ways to use the library. Both boot a per-tab DB worker, join the `SharedWorker`
+multiplexer, and run leader election so exactly **one** tab owns the single OPFS connection;
+every call is routed to that leader.
 
-await init(
-  "my-database", // database name (OPFS-backed)
-  userPrimaryKey, // your app's user identifier
-  workerId, // the per-tab id exported by this library
-);
+### Option A — generic: run SQL from the main thread
+
+```ts
+import { init, dbExec } from "@your-scope/sqlite-webworker";
+
+await init({ dbName: "my-database", userPk: userPrimaryKey });
+
+await dbExec({ sql: "CREATE TABLE IF NOT EXISTS todo (id INTEGER PRIMARY KEY, text TEXT)" });
+const rows = await dbExec({
+  sql: "SELECT id, text FROM todo",
+  rowMode: "array",
+  returnValue: "resultRows",
+});
 ```
 
-`init()` boots the per-tab worker, joins the `SharedWorker` multiplexer, and participates in
-leader election so exactly one tab owns the database connection. It is safe to call once per
-tab; repeated calls are ignored.
+### Option B — own your SQL in a worker (no SQL on the main thread)
+
+Build your **own** DB worker with `defineDbWorker`. Put `CREATE TABLE` in `setup` and your
+queries in `methods`; they execute in the elected leader worker, off the main thread.
+
+```ts
+// todos.worker.ts
+import { defineDbWorker, dbExec, pushToTabs } from "@your-scope/sqlite-webworker/db-worker";
+
+const listAll = (): [number, string][] =>
+  dbExec({
+    sql: "SELECT id, text FROM todo ORDER BY id",
+    rowMode: "array",
+    returnValue: "resultRows",
+  }) as [number, string][];
+
+defineDbWorker({
+  setup() {
+    dbExec({ sql: "CREATE TABLE IF NOT EXISTS todo (id INTEGER PRIMARY KEY, text TEXT)" });
+  },
+  methods: {
+    async addTodo(text: string): Promise<void> {
+      dbExec({ sql: "INSERT INTO todo (text) VALUES (?)", bind: [text] });
+      pushToTabs("todos", listAll()); // fan a snapshot out to all tabs
+    },
+    async listTodos(): Promise<[number, string][]> {
+      return listAll();
+    },
+  },
+});
+
+export interface TodoApi {
+  addTodo(text: string): Promise<void>;
+  listTodos(): Promise<[number, string][]>;
+}
+```
+
+```ts
+// main thread — no SQL, just a typed api
+import { createDb } from "@your-scope/sqlite-webworker";
+import type { TodoApi } from "./todos.worker";
+
+const { ready, api, subscribe } = createDb<TodoApi>({
+  dbName: "my-database",
+  userPk: userPrimaryKey,
+  dbWorker: () => new Worker(new URL("./todos.worker.ts", import.meta.url), { type: "module" }),
+});
+
+await ready;
+subscribe<[number, string][]>("todos", renderTodos); // live updates from any tab
+await api.addTodo("buy milk");
+```
+
+The two `/db-worker` and `/db-core` subpath exports exist so your bundler can build that worker.
+See `demo/counters.worker.ts` + `demo/counters.ts` for a complete working example.
 
 ## Requirements
 

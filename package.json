@@ -10,6 +10,14 @@
     ".": {
       "types": "./dist/main.d.ts",
       "import": "./dist/sqlite-webworker.js"
+    },
+    "./db-worker": {
+      "types": "./dist/db-worker.d.ts",
+      "import": "./dist/db-worker.js"
+    },
+    "./db-core": {
+      "types": "./dist/db-core.d.ts",
+      "import": "./dist/db-core.js"
     }
   },
   "sideEffects": true,

@@ -6,7 +6,7 @@ import {
   type FlexibleString,
   type SqlValue,
 } from "@sqlite.org/sqlite-wasm";
-import { type BroadcastMessage, type WorkerInterface } from "./webworker";
+import { type BroadcastMessage, type BaseWorkerInterface } from "./db-worker";
 import { DB_NOT_INIT_ERR, SHARED_BROADCAST_CHANNEL_NAME } from "./consts";
 
 // Wait 5 seconds after we no longer have any remotes before terminating ourselves
@@ -37,9 +37,9 @@ function debug(...args: any | any[]) {
   if (_DEBUG) console.debug(...args);
 }
 
-let currentLeader: Comlink.Remote<WorkerInterface> | undefined;
+let currentLeader: Comlink.Remote<BaseWorkerInterface> | undefined;
 let currentLeaderId: string | undefined;
-const remotes: { [key: string]: Comlink.Remote<WorkerInterface> } = {};
+const remotes: { [key: string]: Comlink.Remote<BaseWorkerInterface> } = {};
 
 const hasLeaderChannel = new MessageChannel();
 const leaderChangedChannel = new MessageChannel();
@@ -61,7 +61,7 @@ const failOnLeaderChange = (): Promise<never> => {
   });
 };
 
-const getLeader = (): Promise<Comlink.Remote<WorkerInterface>> => {
+const getLeader = (): Promise<Comlink.Remote<BaseWorkerInterface>> => {
   return new Promise((resolve, reject) => {
     if (currentLeader) {
       resolve(currentLeader);
@@ -84,7 +84,7 @@ const sleep = (ms: number) =>
   });
 
 async function withLeader<R>(
-  cb: (remote: Comlink.Remote<WorkerInterface>) => Promise<R>,
+  cb: (remote: Comlink.Remote<BaseWorkerInterface>) => Promise<R>,
   retry?: number,
 ): Promise<R> {
   const remote = await getLeader();
@@ -118,7 +118,7 @@ async function withLeader<R>(
 }
 
 export type LeaderCallBackFn = (
-  currentLeader: Comlink.Remote<WorkerInterface>,
+  currentLeader: Comlink.Remote<BaseWorkerInterface>,
 ) => void;
 let leaderCallback: LeaderCallBackFn;
 
@@ -158,7 +158,7 @@ const sharedInterface = {
       }, SHUTDOWN_DELAY_MS);
     }
   },
-  async registerRemote(id: string, remote: Comlink.Remote<WorkerInterface>) {
+  async registerRemote(id: string, remote: Comlink.Remote<BaseWorkerInterface>) {
     if (!remotes[id]) {
       debug("register remote in shared", id);
       remotes[id] = remote;
@@ -215,6 +215,21 @@ const sharedInterface = {
 
   async notifyTabs(channelName: string, message: unknown): Promise<void> {
     await withLeader(async (remote) => remote.notifyTabs(channelName, message));
+  },
+
+  // Generic passthrough: invoke an app method on whichever DB worker is the
+  // current leader. This is how consumer-defined SQL methods (built with
+  // `defineDbWorker`) reach the single live connection without the multiplexer
+  // needing to know their names.
+  async callLeader(method: string, args: unknown[]): Promise<unknown> {
+    return await withLeader(async (remote) =>
+      (
+        remote as unknown as Record<
+          string,
+          (...a: unknown[]) => Promise<unknown>
+        >
+      )[method](...args),
+    );
   },
 };
 

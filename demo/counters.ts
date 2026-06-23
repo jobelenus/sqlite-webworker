@@ -1,56 +1,35 @@
-// Data layer for the demo. This module owns the lib (init + the single DB
-// leader) and *every* SQL statement. main.ts never sees SQL; it only calls the
-// high-level functions exported here.
-//
-// NOTE: this runs on the main thread, not in a SharedWorker. The library spawns
-// its own SharedWorker + dedicated Worker and uses `window`, both of which only
-// exist on the main thread, so the lib cannot be hosted inside another worker.
-// This module is the equivalent "DB service" boundary for the app code.
-import { init, dbExec, notifyTabs, subscribe, workerId } from "../lib/main";
+// Thin main-thread data layer. No SQL here — it boots the lib with the demo's
+// custom DB worker and exposes a typed `api`. All SQL lives in counters.worker.ts.
+import { createDb } from "../lib/main";
+import type { CounterApi, CounterRow } from "./counters.worker";
 
-// BroadcastChannel name the leader worker uses to push fresh snapshots to every
-// tab. Not a SQL identifier — just a channel label.
+export type { CounterRow };
+
+// Channel the worker pushes snapshots on; subscribe to it for live updates.
 const CHANNEL = "demo_counter";
 
-// A row as the DB returns it: [slug, count].
-export type CounterRow = [slug: string, count: number];
+const { ready, api, subscribe } = createDb<CounterApi>({
+  dbName: "demo",
+  userPk: "demo-user",
+  dbWorker: () =>
+    new Worker(new URL("./counters.worker.ts", import.meta.url), {
+      type: "module",
+    }),
+});
 
-// Boot the lib (per-tab worker + cross-tab leader election) and ensure the
-// table exists. Safe to call once on startup.
+// Boot the lib + cross-tab leader election. The table is created in the worker's
+// `setup`, so there's nothing SQL to do here.
 export async function initCounters(): Promise<void> {
-  await init("sqlite-webworker-demo", "demo-user", workerId);
-
-  await dbExec({
-    sql: `CREATE TABLE IF NOT EXISTS demo_counter (
-            slug TEXT PRIMARY KEY,
-            count INTEGER NOT NULL DEFAULT 0
-          )`,
-  });
+  await ready;
 }
 
-// Read the full table, ordered by slug.
-export async function readCounters(): Promise<CounterRow[]> {
-  return (await dbExec({
-    sql: "SELECT slug, count FROM demo_counter ORDER BY slug",
-    rowMode: "array",
-    returnValue: "resultRows",
-  })) as CounterRow[];
-}
+// Read the full table (routed to the leader worker).
+export const readCounters = (): Promise<CounterRow[]> => api.readCounters();
 
-// Increment (or insert) the counter for `slug`, then push the updated table to
-// every tab via the leader worker (this tab included).
-export async function increment(slug: string): Promise<void> {
-  await dbExec({
-    sql: `INSERT INTO demo_counter (slug, count) VALUES (?, 1)
-          ON CONFLICT(slug) DO UPDATE SET count = count + 1`,
-    bind: [slug],
-  });
+// Increment a slug (routed to the leader, which writes and fans out the update).
+export const increment = (slug: string): Promise<void> => api.increment(slug);
 
-  await notifyTabs(CHANNEL, await readCounters());
-}
-
-// Subscribe to cross-tab snapshots pushed by `increment`. Returns an
-// unsubscribe function.
+// Subscribe to cross-tab snapshots the worker pushes after each write.
 export function subscribeCounters(
   callback: (rows: CounterRow[]) => void,
 ): () => void {

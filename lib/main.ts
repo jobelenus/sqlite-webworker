@@ -1,7 +1,7 @@
 import * as Comlink from "comlink";
 import { monotonicFactory } from "ulid";
 import type { SharedInterface } from "./shared_webworker";
-import type { WorkerInterface } from "./webworker";
+import type { BaseWorkerInterface } from "./db-worker";
 import {
   DB_LOCK_ACQUIRED,
   FORCE_LEADER_ELECTION,
@@ -27,31 +27,36 @@ let sharedWorker = spawnSharedWorker(sharedWebWorkerName);
 let db: Comlink.Remote<SharedInterface> = Comlink.wrap(sharedWorker.port);
 let lockAcquired = false;
 
-const tabWorker = new Worker(new URL("./webworker.ts", import.meta.url), {
-  type: "module",
-  name: `db-${__LIB_VERSION__}`,
-});
-const tabDb: Comlink.Remote<WorkerInterface> = Comlink.wrap(tabWorker);
+// The dedicated DB worker (the thing that owns the OPFS connection when elected
+// leader). Constructed in `init` from the factory the consumer supplies, so
+// they can ship their own worker with app SQL methods. Defaults to the lib's
+// generic DB worker.
+const defaultDbWorker = () =>
+  new Worker(new URL("./webworker.ts", import.meta.url), {
+    type: "module",
+    name: `db-${__LIB_VERSION__}`,
+  });
+
+let tabWorker: Worker | undefined;
+let tabDb: Comlink.Remote<BaseWorkerInterface> | undefined;
 
 const onSharedWorkerBootBroadcastChannel = new BroadcastChannel(
   SHARED_BROADCAST_CHANNEL_NAME,
 );
 
 onSharedWorkerBootBroadcastChannel.onmessage = async (msg) => {
+  if (!tabDb) return;
   const name = msg.data as string;
   if (name !== sharedWebWorkerName) {
     // This will ensure that the new shared worker is the one we use to
     // communicate with the various remotes if a new version of the shared
     // webworker code is detected. But, note that if the interface changes, this
     // tab will still have to be reloaded for that communication to work.
-
-    // eslint-disable-next-line no-console
     db.unregisterRemote(workerId);
     sharedWorker = spawnSharedWorker(name);
     sharedWebWorkerName = name;
     db = Comlink.wrap(sharedWorker.port);
     db.registerRemote(workerId, Comlink.proxy(tabDb));
-    // showCachedAppNotification();
   } else {
     db.registerRemote(workerId, Comlink.proxy(tabDb));
   }
@@ -60,10 +65,10 @@ onSharedWorkerBootBroadcastChannel.onmessage = async (msg) => {
 };
 
 const detectLockAcquiredByOtherTab = async () => {
+  if (!tabDb) return;
   if (!(await tabDb.hasDbLock()) && !lockAcquired) {
     const currentLeaderId = await db.currentLeaderId();
     if (currentLeaderId) {
-      // eslint-disable-next-line no-console
       lockAcquired = true;
     }
   }
@@ -83,7 +88,7 @@ const initialize = (
   userPk: string,
   workerId: string,
 ) => {
-  tabDb
+  tabDb!
     .initialize(dbName, Comlink.proxy(messagePort), userPk, workerId)
     .then((result) => {
       if (typeof result === "string" && result === FORCE_LEADER_ELECTION) {
@@ -92,26 +97,35 @@ const initialize = (
     });
 };
 
+export interface InitOptions {
+  // The OPFS-backed database name.
+  dbName: string;
+  // Your app's user identifier.
+  userPk: string;
+  // Factory for the dedicated DB worker. Supply one built with `defineDbWorker`
+  // to own your SQL inside the worker; omit to use the lib's generic worker and
+  // drive it with the exported `dbExec`.
+  dbWorker?: () => Worker;
+}
+
 let ranInit = false;
-export const init = async (
-  dbName: string,
-  userPk: string,
-  workerId: string,
-) => {
+export const init = async (opts: InitOptions): Promise<void> => {
   if (!ranInit) {
+    ranInit = true;
+
+    tabWorker = (opts.dbWorker ?? defaultDbWorker)();
+    tabDb = Comlink.wrap(tabWorker);
+
     const { port1, port2 } = new MessageChannel();
     // This message fires when the lock has been acquired for this tab
     port1.onmessage = () => {
       // Ensure we're registered. Register will set the remote!
-      db.registerRemote(workerId, Comlink.proxy(tabDb));
-      // eslint-disable-next-line no-console
+      db.registerRemote(workerId, Comlink.proxy(tabDb!));
       lockAcquired = true;
       lockAcquiredBroadcastChannel.postMessage(workerId);
     };
 
-    initialize(dbName, port2, userPk, workerId);
-
-    ranInit = true;
+    initialize(opts.dbName, port2, opts.userPk, workerId);
   }
 
   // If both tabs are refreshed at the same time, this can falsely indicate that
@@ -161,13 +175,37 @@ export const dbExec = (
     Partial<Pick<DbExecOptions, "rowMode" | "returnValue">>,
 ) => db.dbExec(opts as DbExecOptions);
 
+// Call an app method defined in your custom DB worker. Routed to the current
+// leader. Prefer the typed `api` proxy from `createDb` over calling this
+// directly.
+export const callLeader = <R = unknown>(
+  method: string,
+  ...args: unknown[]
+): Promise<R> => db.callLeader(method, args) as Promise<R>;
+
+// A typed proxy over `callLeader`: every property becomes a function whose call
+// is forwarded to the same-named method on the leader DB worker. `T` is your
+// worker's app-methods interface.
+export function createApi<T extends object>(): Comlink.Remote<T> {
+  return new Proxy(
+    {},
+    {
+      get(_target, prop) {
+        if (typeof prop !== "string") return undefined;
+        return (...args: unknown[]) => db.callLeader(prop, args);
+      },
+    },
+  ) as Comlink.Remote<T>;
+}
+
 // Ask the leader worker to push `message` to every tab on this origin. Pair with
 // `subscribe` in each tab's main thread to react. The leader worker performs the
 // post, so all main threads receive it (including the tab that called this).
 export const notifyTabs = (channelName: string, message: unknown) =>
   db.notifyTabs(channelName, message);
 
-// Listen for messages pushed via `notifyTabs`. Returns an unsubscribe function.
+// Listen for messages pushed via `notifyTabs` / `pushToTabs`. Returns an
+// unsubscribe function.
 export const subscribe = <T = unknown>(
   channelName: string,
   callback: (message: T) => void,
@@ -176,3 +214,33 @@ export const subscribe = <T = unknown>(
   channel.onmessage = (event: MessageEvent) => callback(event.data as T);
   return () => channel.close();
 };
+
+// One-call setup tying everything together: boots the lib with your custom DB
+// worker and hands back a typed `api` to call its methods. `TApi` is your
+// worker's app-methods interface (export it from your worker module).
+export interface CreateDbResult<TApi extends object> {
+  ready: Promise<void>;
+  api: Comlink.Remote<TApi>;
+  workerId: string;
+  notifyTabs: typeof notifyTabs;
+  subscribe: typeof subscribe;
+}
+
+export function createDb<TApi extends object>(opts: {
+  dbName: string;
+  userPk: string;
+  dbWorker: () => Worker;
+}): CreateDbResult<TApi> {
+  const ready = init({
+    dbName: opts.dbName,
+    userPk: opts.userPk,
+    dbWorker: opts.dbWorker,
+  });
+  return {
+    ready,
+    api: createApi<TApi>(),
+    workerId,
+    notifyTabs,
+    subscribe,
+  };
+}
