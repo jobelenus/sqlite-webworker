@@ -39,6 +39,7 @@ const onSharedWorkerBootBroadcastChannel = new BroadcastChannel(
 
 onSharedWorkerBootBroadcastChannel.onmessage = async (msg) => {
   const name = msg.data as string;
+  console.log("[main] shared boot broadcast", name, "expecting", sharedWebWorkerName);
   if (name !== sharedWebWorkerName) {
     // This will ensure that the new shared worker is the one we use to
     // communicate with the various remotes if a new version of the shared
@@ -102,6 +103,7 @@ export const init = async (
     const { port1, port2 } = new MessageChannel();
     // This message fires when the lock has been acquired for this tab
     port1.onmessage = () => {
+      console.log("[main] lock acquired port fired -> registerRemote", workerId);
       // Ensure we're registered. Register will set the remote!
       db.registerRemote(workerId, Comlink.proxy(tabDb));
       // eslint-disable-next-line no-console
